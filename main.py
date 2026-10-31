@@ -8,25 +8,30 @@ import queue
 import threading
 
 import customtkinter as ctk
+from PIL import Image, ImageDraw
 
 import recommender as rec
 
 # --------------------------------------------------------------------------
-# Theme: near-black background, one green accent
+# Theme: one green accent. Every colour is a (light mode, dark mode) pair, which
+# CustomTkinter switches automatically when the appearance mode changes.
 # --------------------------------------------------------------------------
-BG = "#0b0b0b"
-CARD = "#141414"
-CARD_ALT = "#1b1b1b"
-BORDER = "#2a2a2a"
+BG = ("#f4f4f5", "#0b0b0b")
+CARD = ("#ffffff", "#141414")
+CARD_ALT = ("#ececee", "#1b1b1b")
+BORDER = ("#d4d4d8", "#2a2a2a")
 ACCENT = "#22c55e"
 ACCENT_HOVER = "#16a34a"
 ACCENT_TEXT = "#04130a"        # dark text on green buttons
-SELECTED = "#13301d"
-TEXT = "#ededed"
-MUTED = "#9a9a9a"
-DISABLED = "#5c5c5c"
-ERROR = "#f87171"
-WARNING = "#fbbf24"
+ACCENT_FG = ("#15803d", "#22c55e")   # green used for text (darker in light mode for contrast)
+SELECTED = ("#dcfce7", "#13301d")
+TEXT = ("#171717", "#ededed")
+MUTED = ("#6b6b6b", "#9a9a9a")
+DISABLED = ("#a3a3a3", "#5c5c5c")
+ERROR = ("#dc2626", "#f87171")
+WARNING = ("#b45309", "#fbbf24")
+SCROLL_HOVER = ("#b4b4b8", "#3a3a3a")
+REMOVE_HOVER = ("#fee2e2", "#3a1515")
 
 
 # --------------------------------------------------------------------------
@@ -81,7 +86,7 @@ def make_option_menu(parent, values, variable=None, command=None, width=90):
 def make_scroll_frame(parent):
     return ctk.CTkScrollableFrame(
         parent, fg_color="transparent",
-        scrollbar_button_color=BORDER, scrollbar_button_hover_color="#3a3a3a",
+        scrollbar_button_color=BORDER, scrollbar_button_hover_color=SCROLL_HOVER,
     )
 
 
@@ -89,6 +94,58 @@ def bind_click(widgets, callback):
     """Make a custom 'row' (frame + labels) clickable."""
     for widget in widgets:
         widget.bind("<Button-1>", lambda event: callback())
+
+
+def make_icon_button(parent, text, command):
+    """Small square button with a one-character icon (settings, help)."""
+    return ctk.CTkButton(
+        parent, text=text, command=command, width=40, height=40, corner_radius=10,
+        fg_color="transparent", hover_color=CARD_ALT, border_width=1, border_color=BORDER,
+        text_color=TEXT, font=ctk.CTkFont(size=20, weight="bold"),
+    )
+
+
+def icon_bar(parent, app):
+    """The settings and how-to-use icons, shown in the top-right corner of every page."""
+    bar = ctk.CTkFrame(parent, fg_color="transparent")
+    make_icon_button(bar, "?", app.open_how_to).grid(row=0, column=0, padx=(0, 8))
+    make_icon_button(bar, "\u2699", app.open_settings).grid(row=0, column=1)
+    return bar
+
+
+def draw_icon(kind, color, size=64):
+    """Draw a small icon with Pillow, so it looks the same on every operating system.
+
+    It is drawn 4x larger and scaled down, which gives smooth edges.
+    """
+    big = size * 4
+    unit = big / 100  # draw on a 100 x 100 grid
+    image = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    if kind == "copy":
+        width, radius = int(8 * unit), int(10 * unit)
+        draw.rounded_rectangle([14 * unit, 14 * unit, 64 * unit, 64 * unit],
+                               radius=radius, outline=color, width=width)
+        # erase the part of the back sheet that is hidden behind the front sheet
+        draw.rounded_rectangle([30 * unit, 30 * unit, 92 * unit, 92 * unit],
+                               radius=radius, fill=(0, 0, 0, 0))
+        draw.rounded_rectangle([36 * unit, 36 * unit, 86 * unit, 86 * unit],
+                               radius=radius, outline=color, width=width)
+    elif kind == "check":
+        points = [(20 * unit, 54 * unit), (42 * unit, 76 * unit), (82 * unit, 28 * unit)]
+        draw.line(points, fill=color, width=int(12 * unit), joint="curve")
+    return image.resize((size, size), Image.LANCZOS)
+
+
+def make_icons():
+    """CTkImages with a light-mode and a dark-mode version, created once at startup."""
+    def pair(kind, light_color, dark_color):
+        return ctk.CTkImage(light_image=draw_icon(kind, light_color),
+                            dark_image=draw_icon(kind, dark_color), size=(18, 18))
+    return {
+        "copy": pair("copy", (82, 82, 91, 255), (200, 200, 200, 255)),
+        "check": pair("check", (21, 128, 61, 255), (34, 197, 94, 255)),
+    }
 
 
 def header_bar(parent, app, title):
@@ -100,6 +157,7 @@ def header_bar(parent, app, title):
     make_label(bar, title, size=24, weight="bold").grid(row=0, column=1, sticky="w")
     user_label = make_label(bar, "", size=13, color=MUTED)
     user_label.grid(row=0, column=2, sticky="e")
+    icon_bar(bar, app).grid(row=0, column=3, padx=(16, 0))
     return bar, user_label
 
 
@@ -110,6 +168,7 @@ class App(ctk.CTk):
     def __init__(self):
         ctk.set_appearance_mode("dark")
         super().__init__()
+        self.icons = make_icons()
         self.title("CineMatch")
         self.geometry("1060x740")
         self.minsize(880, 640)
@@ -117,6 +176,8 @@ class App(ctk.CTk):
 
         self.data = None      # datasets + cached models, loaded once at startup
         self.profile = None   # the active user's profile (None until a username is entered)
+        self.num_recommendations = rec.NUM_RECOMMENDATIONS  # changed in Settings (1-10)
+        self.windows = {}     # open pop-up windows, so each one can only be opened once
 
         container = ctk.CTkFrame(self, fg_color="transparent")
         container.pack(fill="both", expand=True, padx=28, pady=22)
@@ -140,6 +201,24 @@ class App(ctk.CTk):
         page.tkraise()
         if hasattr(page, "on_show"):
             page.on_show()
+
+    def open_window(self, key, window_class):
+        window = self.windows.get(key)
+        if window is not None and window.winfo_exists():
+            window.deiconify()
+            window.lift()
+            window.focus()
+            return
+        self.windows[key] = window_class(self)
+
+    def open_settings(self):
+        self.open_window("settings", SettingsWindow)
+
+    def open_how_to(self):
+        self.open_window("how_to", HowToWindow)
+
+    def set_appearance(self, mode):
+        ctk.set_appearance_mode(mode.lower())  # "light" or "dark"
 
     def run_in_background(self, work, on_success, on_error):
         """Run slow work in a thread so the window never freezes.
@@ -180,6 +259,112 @@ class App(ctk.CTk):
 
 
 # --------------------------------------------------------------------------
+# Pop-up windows: Settings and How to use
+# --------------------------------------------------------------------------
+class PopupWindow(ctk.CTkToplevel):
+    """Shared setup for the small windows opened from the icon bar."""
+
+    def __init__(self, app, title, width, height):
+        super().__init__(app)
+        self.app = app
+        self.title(title)
+        self.geometry(f"{width}x{height}")
+        self.resizable(False, False)
+        self.configure(fg_color=BG)
+        self.transient(app)  # stays on top of the main window
+        self.after(150, self.focus)
+
+
+class SettingsWindow(PopupWindow):
+    def __init__(self, app):
+        super().__init__(app, "Settings", 420, 330)
+        self.grid_columnconfigure(0, weight=1)
+
+        make_label(self, "Settings", size=22, weight="bold").grid(
+            row=0, column=0, sticky="w", padx=24, pady=(22, 12))
+
+        card = make_card(self)
+        card.grid(row=1, column=0, sticky="ew", padx=24)
+        card.grid_columnconfigure(0, weight=1)
+
+        make_label(card, "Appearance", size=14, weight="bold").grid(
+            row=0, column=0, sticky="w", padx=18, pady=(16, 0))
+        make_label(card, "Light or dark mode", size=12, color=MUTED).grid(
+            row=1, column=0, sticky="w", padx=18, pady=(0, 14))
+        self.mode_var = ctk.StringVar(value=ctk.get_appearance_mode())  # "Light" or "Dark"
+        make_option_menu(card, ["Light", "Dark"], variable=self.mode_var,
+                         command=app.set_appearance).grid(
+            row=0, column=1, rowspan=2, padx=18)
+
+        make_label(card, "Movies per recommendation", size=14, weight="bold").grid(
+            row=2, column=0, sticky="w", padx=18, pady=(4, 0))
+        make_label(card, f"How many movies to suggest (1-{rec.MAX_RECOMMENDATIONS})", size=12,
+                   color=MUTED).grid(row=3, column=0, sticky="w", padx=18, pady=(0, 16))
+        self.count_var = ctk.StringVar(value=str(app.num_recommendations))
+        make_option_menu(card, [str(i) for i in range(1, rec.MAX_RECOMMENDATIONS + 1)],
+                         variable=self.count_var, command=self.set_count).grid(
+            row=2, column=1, rowspan=2, padx=18)
+
+        make_button(self, "Close", self.destroy, primary=False, width=100).grid(
+            row=2, column=0, sticky="e", padx=24, pady=18)
+
+    def set_count(self, value):
+        self.app.num_recommendations = int(value)  # used the next time you press Get Recommendations
+
+
+HOW_TO_STEPS = [
+    ("1. Create or load your profile",
+     "On the home page, type a username and press \"Create / Load Profile\". "
+     "The same username always brings back the same list of movies."),
+    ("2. Rate movies you know",
+     "Open \"Edit My List\". Search for a movie by title, click it, choose your rating and press "
+     "\"Add to My List\". You can change a rating or remove a movie from the list on the right. "
+     "Everything is saved automatically."),
+    ("3. Get recommendations",
+     "Open \"Recommend Movies\", choose an algorithm and press \"Get Recommendations\"."),
+    ("4. Copy a title",
+     "Press the copy icon next to a recommended movie to copy its name."),
+    ("5. Change the settings",
+     "Use the gear icon to switch between light and dark mode and to choose how many "
+     "movies are recommended (1-10)."),
+]
+
+HOW_TO_TIPS = (
+    "Tips\n"
+    "- Rate at least 3 movies, and include some you really liked (3.5 or higher).\n"
+    "- Content-based compares genres. Collaborative uses the ratings of other viewers.\n"
+    "- Movies already in your list are never recommended.\n"
+    "- If one algorithm finds nothing, try the other one."
+)
+
+
+class HowToWindow(PopupWindow):
+    def __init__(self, app):
+        super().__init__(app, "How to use CineMatch", 520, 600)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        make_label(self, "How to use CineMatch", size=22, weight="bold").grid(
+            row=0, column=0, sticky="w", padx=24, pady=(22, 8))
+
+        body = make_scroll_frame(self)
+        body.grid(row=1, column=0, sticky="nsew", padx=14)
+        body.grid_columnconfigure(0, weight=1)
+        for index, (heading, text) in enumerate(HOW_TO_STEPS):
+            card = make_card(body)
+            card.grid(row=index, column=0, sticky="ew", pady=5, padx=(10, 6))
+            make_label(card, heading, size=14, weight="bold", color=ACCENT_FG).grid(
+                row=0, column=0, sticky="w", padx=16, pady=(12, 2))
+            make_label(card, text, size=13, wraplength=420, justify="left", anchor="w").grid(
+                row=1, column=0, sticky="w", padx=16, pady=(0, 12))
+        make_label(body, HOW_TO_TIPS, size=12, color=MUTED, wraplength=440, justify="left",
+                   anchor="w").grid(row=len(HOW_TO_STEPS), column=0, sticky="w", padx=18, pady=10)
+
+        make_button(self, "Close", self.destroy, primary=False, width=100).grid(
+            row=2, column=0, sticky="e", padx=24, pady=16)
+
+
+# --------------------------------------------------------------------------
 # Loading page
 # --------------------------------------------------------------------------
 class LoadingPage(ctk.CTkFrame):
@@ -191,7 +376,7 @@ class LoadingPage(ctk.CTkFrame):
 
         box = ctk.CTkFrame(self, fg_color="transparent")
         box.grid(row=0, column=0)
-        make_label(box, "CineMatch", size=44, weight="bold", color=ACCENT).pack(pady=(0, 18))
+        make_label(box, "CineMatch", size=44, weight="bold", color=ACCENT_FG).pack(pady=(0, 18))
         self.progress = ctk.CTkProgressBar(
             box, mode="indeterminate", width=320, progress_color=ACCENT, fg_color=BORDER)
         self.progress.pack()
@@ -219,17 +404,19 @@ class HomePage(ctk.CTkFrame):
     def __init__(self, parent, app):
         super().__init__(parent, fg_color="transparent")
         self.app = app
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
+        icon_bar(self, app).grid(row=0, column=0, sticky="e")
+
         content = ctk.CTkFrame(self, fg_color="transparent")
-        content.grid(row=0, column=0)
+        content.grid(row=1, column=0)
         content.grid_columnconfigure(0, minsize=640)
 
-        make_label(content, "CineMatch", size=48, weight="bold", color=ACCENT).grid(row=0, column=0)
+        make_label(content, "CineMatch", size=48, weight="bold", color=ACCENT_FG).grid(row=0, column=0)
         make_label(
             content,
-            "Rate movies you know and get five recommendations, using either genre-based "
+            "Rate movies you know and get movie recommendations, using either genre-based "
             "(content-based) or crowd-based (collaborative) filtering.",
             size=14, color=MUTED, wraplength=600, justify="center",
         ).grid(row=1, column=0, pady=(6, 0))
@@ -259,7 +446,7 @@ class HomePage(ctk.CTkFrame):
             row=0, column=1, sticky="w", padx=20, pady=(14, 0))
         self.active_user = make_label(status_card, "", size=20, weight="bold")
         self.active_user.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 14))
-        self.rated_count = make_label(status_card, "", size=20, weight="bold", color=ACCENT)
+        self.rated_count = make_label(status_card, "", size=20, weight="bold", color=ACCENT_FG)
         self.rated_count.grid(row=1, column=1, sticky="w", padx=20, pady=(0, 14))
 
         # --- actions ---
@@ -294,7 +481,7 @@ class HomePage(ctk.CTkFrame):
         if warning:
             self.set_message(warning, WARNING)
         else:
-            self.set_message("New profile created." if created else "Profile loaded.", ACCENT)
+            self.set_message("New profile created." if created else "Profile loaded.", ACCENT_FG)
         self.refresh()
 
     def refresh(self):
@@ -304,7 +491,7 @@ class HomePage(ctk.CTkFrame):
             self.rated_count.configure(text="-", text_color=MUTED)
         else:
             self.active_user.configure(text=profile["username"], text_color=TEXT)
-            self.rated_count.configure(text=str(len(profile["rated_movies"])), text_color=ACCENT)
+            self.rated_count.configure(text=str(len(profile["rated_movies"])), text_color=ACCENT_FG)
 
         enabled = profile is not None
         self.edit_button.configure(state="normal" if enabled else "disabled")
@@ -493,7 +680,7 @@ class EditPage(ctk.CTkFrame):
             self.panel_message.configure(text=f"Could not save: {exc}", text_color=ERROR)
             return
         self.add_button.configure(text="Update Rating")
-        self.panel_message.configure(text="Saved to your list.", text_color=ACCENT)
+        self.panel_message.configure(text="Saved to your list.", text_color=ACCENT_FG)
         self.render_list()
 
     # ----- the user's list -----
@@ -525,7 +712,7 @@ class EditPage(ctk.CTkFrame):
             menu.grid(row=0, column=1, padx=6)
             ctk.CTkButton(
                 row, text="Remove", width=70, height=32, corner_radius=8, fg_color="transparent",
-                border_width=1, border_color=BORDER, text_color=MUTED, hover_color="#3a1515",
+                border_width=1, border_color=BORDER, text_color=MUTED, hover_color=REMOVE_HOVER,
                 command=lambda movie_id=entry["movieId"]: self.remove(movie_id),
             ).grid(row=0, column=2, padx=(0, 10))
 
@@ -699,8 +886,9 @@ class RecommendPage(ctk.CTkFrame):
         data, profile = self.app.data, self.app.profile
         self.set_busy(True)
         self.hide_banner()
+        count = self.app.num_recommendations
         self.app.run_in_background(
-            lambda: rec.get_recommendations(data, profile, method),
+            lambda: rec.get_recommendations(data, profile, method, count),
             self.show_results, self.show_error)
 
     def try_other_algorithm(self):
@@ -726,7 +914,7 @@ class RecommendPage(ctk.CTkFrame):
             card = make_card(self.results)
             card.grid(row=index, column=0, sticky="ew", pady=5, padx=(0, 4))
             card.grid_columnconfigure(1, weight=1)
-            make_label(card, str(index + 1), size=22, weight="bold", color=ACCENT, width=44).grid(
+            make_label(card, str(index + 1), size=22, weight="bold", color=ACCENT_FG, width=44).grid(
                 row=0, column=0, rowspan=3, padx=(10, 0), pady=14)
             make_label(card, movie["title"], size=16, weight="bold", anchor="w",
                        justify="left", wraplength=560).grid(
@@ -737,9 +925,25 @@ class RecommendPage(ctk.CTkFrame):
                                 wraplength=560)
             reason.grid(row=2, column=1, sticky="w", padx=8, pady=(4, 12))
             ctk.CTkLabel(
-                card, text=movie["score_label"], fg_color=SELECTED, text_color=ACCENT,
+                card, text=movie["score_label"], fg_color=SELECTED, text_color=ACCENT_FG,
                 corner_radius=8, font=ctk.CTkFont(size=12, weight="bold"), width=170, height=30,
-            ).grid(row=0, column=2, rowspan=3, padx=16)
+            ).grid(row=0, column=2, rowspan=3, padx=(16, 8))
+            copy_button = ctk.CTkButton(
+                card, text="", image=self.app.icons["copy"], width=36, height=36, corner_radius=8,
+                fg_color="transparent", hover_color=CARD_ALT, border_width=1, border_color=BORDER)
+            copy_button.configure(command=lambda t=movie["title"], b=copy_button: self.copy_title(t, b))
+            copy_button.grid(row=0, column=3, rowspan=3, padx=(0, 16))
+
+    def copy_title(self, title, button):
+        self.clipboard_clear()
+        self.clipboard_append(title)
+        self.update()  # lets the clipboard keep the text even after the app closes (Windows)
+        button.configure(image=self.app.icons["check"])  # brief confirmation
+        self.after(1200, lambda: self.reset_copy_icon(button))
+
+    def reset_copy_icon(self, button):
+        if button.winfo_exists():  # the results may have been re-rendered meanwhile
+            button.configure(image=self.app.icons["copy"])
 
 
 def main():

@@ -33,7 +33,8 @@ USERS_DIR = BASE_DIR / "users"
 METHOD_CONTENT = "content"
 METHOD_COLLABORATIVE = "collaborative"
 
-NUM_RECOMMENDATIONS = 5
+NUM_RECOMMENDATIONS = 5       # default number of recommendations
+MAX_RECOMMENDATIONS = 10      # the most the GUI lets the user ask for
 MAX_SEARCH_RESULTS = 50
 
 # Collaborative filtering
@@ -556,6 +557,7 @@ def get_recommendations(data, profile, method, n=NUM_RECOMMENDATIONS):
     The chosen algorithm is never swapped silently: if it cannot produce results, the message
     explains why and the GUI offers the other algorithm as a choice.
     """
+    n = max(1, min(int(n), MAX_RECOMMENDATIONS))  # keep n between 1 and the maximum
     if not profile["rated_movies"]:
         return {
             "recommendations": [],
