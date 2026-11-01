@@ -6,7 +6,7 @@ Built with Python, pandas, scikit-learn and CustomTkinter.
 
 <p align="center">
   <img src="assets/recommender.png" width="48%" alt="CineMatch Recommendations">
-  <img src="assets/list.png" width="48%" alt="CineMatch Movie List">
+  <img src="assets/List.png" width="48%" alt="CineMatch Movie List">
 </p>
 
 ## Features
